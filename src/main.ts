@@ -38,6 +38,94 @@ const DEFAULT_SETTINGS: RfrPluginSettings = {
 const logThreshold = 9;
 const logger = (logString: string, logLevel=0): void => {if (logLevel <= logThreshold) console.log ('RegexFiRe: ' + logString)};
 
+type FixStat = { key: string; count: number };
+
+const fixMarkdownFormatting = (text: string): { text: string; stats: FixStat[] } => {
+	let stats: FixStat[] = [];
+	const inc = (key: string, by = 1) => {
+		const s = stats.find(x => x.key === key);
+		if (s) s.count += by; else stats.push({ key, count: by });
+	};
+
+	const lines = text.split('\n');
+	let inFence = false;
+	let fenceMarker = '';
+	for (let i = 0; i < lines.length; i++) {
+		let line = lines[i];
+		const fenceMatch = line.match(/^\s*(```+|~~~+)/);
+		if (fenceMatch) {
+			const marker = fenceMatch[1].startsWith('`') ? '```' : '~~~';
+			if (!inFence) { inFence = true; fenceMarker = marker; }
+			else if (marker === fenceMarker) { inFence = false; fenceMarker = ''; }
+			lines[i] = line;
+			continue;
+		}
+		if (inFence) { continue; }
+
+		let updated = line;
+
+		const dupHead = updated.replace(/^(\s{0,3})(#{1,6})\s+#{1,6}\s+(.+)$/, (_m, p1, p2, p3) => {
+			inc('heading_duplicate_hashes');
+			return `${p1}${p2} ${String(p3).trim()}`;
+		});
+		updated = dupHead;
+
+		const capHead = updated.replace(/^(\s*)(#{7,})\s+(\S.*)$/, (_m, p1, _p2, p3) => {
+			inc('heading_cap_to_h6');
+			return `${p1}###### ${p3}`;
+		});
+		updated = capHead;
+
+		const normHead = updated.replace(/^(\s{0,3})(#{1,6})[ \t]*(\S.*)$/, (m, p1, p2, p3) => {
+			const desired = `${p1}${p2} ${p3}`;
+			if (m !== desired) inc('heading_space_normalize');
+			return desired;
+		});
+		updated = normHead;
+
+		const listBullet = updated.replace(/^(\s*)([-+*])[ \t]*(\S)/, (m, p1, p2, p3) => {
+			const desired = `${p1}${p2} ${p3}`;
+			if (m !== desired) inc('list_bullet_space');
+			return desired;
+		});
+		updated = listBullet;
+
+		const listOrdered = updated.replace(/^(\s*)(\d+\.)[ \t]*(\S)/, (m, p1, p2, p3) => {
+			const desired = `${p1}${p2} ${p3}`;
+			if (m !== desired) inc('list_ordered_space');
+			return desired;
+		});
+		updated = listOrdered;
+
+		if (updated !== line) {
+			lines[i] = updated;
+		}
+	}
+
+	let trailingFixes = 0;
+	let inFence2 = false;
+	let fenceMarker2 = '';
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const fenceMatch2 = line.match(/^\s*(```+|~~~+)/);
+		if (fenceMatch2) {
+			const marker = fenceMatch2[1].startsWith('`') ? '```' : '~~~';
+			if (!inFence2) { inFence2 = true; fenceMarker2 = marker; }
+			else if (marker === fenceMarker2) { inFence2 = false; fenceMarker2 = ''; }
+		}
+		if (inFence2) { continue; }
+		if (line.endsWith('  ') && !line.endsWith('   ')) { continue; }
+		const trimmed = line.replace(/[ \t]+$/, '');
+		if (trimmed !== line) {
+			lines[i] = trimmed;
+			trailingFixes++;
+		}
+	}
+	if (trailingFixes > 0) inc('trim_trailing_whitespace', trailingFixes);
+
+	return { text: lines.join('\n'), stats };
+};
+
 export default class RegexFindReplacePlugin extends Plugin {
 	settings: RfrPluginSettings;
 
@@ -54,6 +142,33 @@ export default class RegexFindReplacePlugin extends Plugin {
 			editorCallback: (editor) => {
 				new FindAndReplaceModal(this.app, editor, this.settings, this).open();
 			},
+		});
+
+		this.addCommand({
+			id: 'markdown-fix-formatting',
+			name: 'Markdown: Check and Fix formatting',
+			editorCallback: (editor) => {
+				const doc = editor.getValue();
+				const { text, stats } = fixMarkdownFormatting(doc);
+				if (text !== doc) {
+					editor.setValue(text);
+					const msg = stats
+						.filter(s => s.count > 0)
+						.map(s => {
+							if (s.key === 'heading_duplicate_hashes') return `重复标题井号修复 ${s.count}`;
+							if (s.key === 'heading_cap_to_h6') return `标题级别超过 H6 规范化 ${s.count}`;
+							if (s.key === 'heading_space_normalize') return `标题空格规范化 ${s.count}`;
+							if (s.key === 'list_bullet_space') return `无序列表空格修复 ${s.count}`;
+							if (s.key === 'list_ordered_space') return `有序列表空格修复 ${s.count}`;
+							if (s.key === 'trim_trailing_whitespace') return `行尾空白移除 ${s.count}`;
+							return `${s.key} ${s.count}`;
+						})
+						.join(' · ');
+					new Notice(msg || 'Markdown formatting fixes applied');
+				} else {
+					new Notice('未发现需要修复的 Markdown 格式问题');
+				}
+			}
 		});
 	}
 
