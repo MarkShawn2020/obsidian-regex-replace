@@ -35,6 +35,10 @@ interface RfrPluginSettings {
 	prefillFind: boolean;
 	savedPatterns: RegexPattern[];
 	maxHistorySize: number;
+	showPreview: boolean;
+	previewLimit: number;
+	confirmLargeReplace: boolean;
+	largeReplaceThreshold: number;
 }
 
 const DEFAULT_SETTINGS: RfrPluginSettings = {
@@ -47,7 +51,11 @@ const DEFAULT_SETTINGS: RfrPluginSettings = {
 	processTab: false,
 	prefillFind: false,
 	savedPatterns: [],
-	maxHistorySize: 10
+	maxHistorySize: 10,
+	showPreview: true,
+	previewLimit: 5,
+	confirmLargeReplace: true,
+	largeReplaceThreshold: 20
 }
 
 // logThreshold: 0 ... only error messages
@@ -56,6 +64,78 @@ const logThreshold = 9;
 const logger = (logString: string, logLevel=0): void => {if (logLevel <= logThreshold) console.log ('RegexFiRe: ' + logString)};
 
 type FixStat = { key: string; count: number };
+
+interface MatchPreview {
+	lineNumber: number;
+	lineContent: string;
+	matchedText: string;
+	replacementText: string;
+	matchIndex: number;
+}
+
+const generateMatchPreviews = (
+	text: string,
+	searchString: string,
+	replaceString: string,
+	useRegEx: boolean,
+	caseInsensitive: boolean,
+	limit: number
+): { previews: MatchPreview[], totalCount: number } => {
+	const previews: MatchPreview[] = [];
+	const lines = text.split('\n');
+	let totalCount = 0;
+	let matchIndex = 0;
+
+	if (useRegEx) {
+		let regexFlags = 'gm';
+		if (caseInsensitive) regexFlags += 'i';
+		try {
+			const searchRegex = new RegExp(searchString, regexFlags);
+			const allMatches = text.match(searchRegex);
+			totalCount = allMatches ? allMatches.length : 0;
+
+			for (let i = 0; i < lines.length && previews.length < limit; i++) {
+				const line = lines[i];
+				const lineRegex = new RegExp(searchString, caseInsensitive ? 'gi' : 'g');
+				let match;
+				while ((match = lineRegex.exec(line)) !== null) {
+					if (previews.length >= limit) break;
+					const replacement = line.replace(new RegExp(searchString, caseInsensitive ? 'gi' : 'g'), replaceString);
+					previews.push({
+						lineNumber: i + 1,
+						lineContent: line,
+						matchedText: match[0],
+						replacementText: replacement,
+						matchIndex: matchIndex++
+					});
+					if (!lineRegex.global) break;
+				}
+			}
+		} catch (e) {
+			logger('Invalid regex pattern: ' + e, 0);
+			return { previews: [], totalCount: 0 };
+		}
+	} else {
+		const occurrences = text.split(searchString).length - 1;
+		totalCount = occurrences;
+
+		for (let i = 0; i < lines.length && previews.length < limit; i++) {
+			const line = lines[i];
+			if (line.includes(searchString)) {
+				const replacement = line.split(searchString).join(replaceString);
+				previews.push({
+					lineNumber: i + 1,
+					lineContent: line,
+					matchedText: searchString,
+					replacementText: replacement,
+					matchIndex: matchIndex++
+				});
+			}
+		}
+	}
+
+	return { previews, totalCount };
+};
 
 const fixMarkdownFormatting = (text: string): { text: string; stats: FixStat[] } => {
 	let stats: FixStat[] = [];
@@ -398,19 +478,108 @@ class FindAndReplaceModal extends Modal {
 
 		// Create and show regular expression toggle switch
 		regToggleComponent = addToggleComponent('Use regular expressions', 'If enabled, regular expressions in the find field are processed as such, and regex groups might be addressed in the replace field');
-		
-		// Update regex-flags label if regular expressions are enabled or disabled
-		regToggleComponent.onChange( regNew => {
-			if (regNew) {
-				findRegexFlags.setText('/' + regexFlags);
-			}
-			else {
-				findRegexFlags.setText('');
-			}
-		})
 
 		// Create and show selection toggle switch only if any text is selected
 		const selToggleComponent = addToggleComponent('Replace only in selection', 'If enabled, replaces only occurances in the currently selected text', noSelection);
+
+		// Create preview section
+		const previewContainerEl = document.createElement(divClass);
+		previewContainerEl.addClass('preview-container');
+		previewContainerEl.style.marginTop = '1em';
+		previewContainerEl.style.marginBottom = '1em';
+
+		const previewTitleEl = document.createElement(divClass);
+		previewTitleEl.addClass('preview-title');
+		previewTitleEl.style.fontWeight = 'bold';
+		previewTitleEl.style.marginBottom = '0.5em';
+
+		const previewContentEl = document.createElement(divClass);
+		previewContentEl.addClass('preview-content');
+		previewContentEl.style.fontSize = '0.9em';
+		previewContentEl.style.maxHeight = '200px';
+		previewContentEl.style.overflowY = 'auto';
+		previewContentEl.style.padding = '0.5em';
+		previewContentEl.style.backgroundColor = 'var(--background-secondary)';
+		previewContentEl.style.borderRadius = '4px';
+
+		previewContainerEl.appendChild(previewTitleEl);
+		previewContainerEl.appendChild(previewContentEl);
+
+		if (this.settings.showPreview) {
+			contentEl.appendChild(previewContainerEl);
+		}
+
+		const updatePreview = () => {
+			if (!this.settings.showPreview) return;
+
+			const searchString = findInputComponent.getValue();
+			const replaceString = replaceWithInputComponent.getValue();
+
+			if (!searchString) {
+				previewTitleEl.setText('Preview: Enter search text');
+				previewContentEl.setText('');
+				return;
+			}
+
+			const targetText = selToggleComponent.getValue() && !noSelection
+				? editor.getSelection()
+				: editor.getValue();
+
+			const { previews, totalCount } = generateMatchPreviews(
+				targetText,
+				searchString,
+				replaceString,
+				regToggleComponent.getValue(),
+				this.settings.caseInsensitive,
+				this.settings.previewLimit
+			);
+
+			if (totalCount === 0) {
+				previewTitleEl.setText('Preview: No matches found');
+				previewContentEl.setText('');
+			} else {
+				const scope = selToggleComponent.getValue() ? 'selection' : 'document';
+				previewTitleEl.setText(`Preview: ${totalCount} match${totalCount !== 1 ? 'es' : ''} in ${scope}`);
+
+				let previewHtml = '';
+				previews.forEach(p => {
+					const oldText = p.matchedText.length > 50
+						? p.matchedText.substring(0, 47) + '...'
+						: p.matchedText;
+					const newLine = p.replacementText.length > 80
+						? p.replacementText.substring(0, 77) + '...'
+						: p.replacementText;
+
+					previewHtml += `<div style="margin-bottom: 0.5em; padding: 0.3em; border-left: 2px solid var(--interactive-accent);">`;
+					previewHtml += `<div style="font-size: 0.85em; color: var(--text-muted);">Line ${p.lineNumber}</div>`;
+					previewHtml += `<div style="color: var(--text-error); text-decoration: line-through;">"${oldText}"</div>`;
+					previewHtml += `<div style="color: var(--text-success);">→ "${newLine}"</div>`;
+					previewHtml += `</div>`;
+				});
+
+				if (totalCount > previews.length) {
+					previewHtml += `<div style="font-style: italic; color: var(--text-muted); margin-top: 0.5em;">...and ${totalCount - previews.length} more</div>`;
+				}
+
+				previewContentEl.innerHTML = previewHtml;
+			}
+		};
+
+		// Add listeners to update preview
+		findInputComponent.inputEl.addEventListener('input', updatePreview);
+		replaceWithInputComponent.inputEl.addEventListener('input', updatePreview);
+		regToggleComponent.onChange(() => {
+			updatePreview();
+			if (regToggleComponent.getValue()) {
+				findRegexFlags.setText('/' + regexFlags);
+			} else {
+				findRegexFlags.setText('');
+			}
+		});
+		selToggleComponent.onChange(updatePreview);
+
+		// Initial preview
+		updatePreview();
 
 		// Create Buttons
 		const buttonContainerEl = document.createElement(divClass);
@@ -435,7 +604,8 @@ class FindAndReplaceModal extends Modal {
 
 		submitButtonComponent.setButtonText('Replace All');
 		submitButtonComponent.setCta();
-		submitButtonComponent.onClick(() => {
+
+		const performReplacement = () => {
 			let resultString = 'No match';
 			let scope = '';
 			const searchString = findInputComponent.getValue();
@@ -526,7 +696,44 @@ class FindAndReplaceModal extends Modal {
 			this.plugin.saveData(this.settings);
 
 			this.close();
-			new Notice(resultString);					
+			new Notice(resultString);
+		};
+
+		submitButtonComponent.onClick(() => {
+			const searchString = findInputComponent.getValue();
+			if (!searchString) {
+				new Notice('Nothing to search for!');
+				return;
+			}
+
+			// Check if confirmation is needed for large replacements
+			if (this.settings.confirmLargeReplace) {
+				const targetText = selToggleComponent.getValue() && !noSelection
+					? editor.getSelection()
+					: editor.getValue();
+
+				const { totalCount } = generateMatchPreviews(
+					targetText,
+					searchString,
+					replaceWithInputComponent.getValue(),
+					regToggleComponent.getValue(),
+					this.settings.caseInsensitive,
+					1
+				);
+
+				if (totalCount >= this.settings.largeReplaceThreshold) {
+					const scope = selToggleComponent.getValue() ? 'selection' : 'document';
+					const confirmed = confirm(
+						`This will replace ${totalCount} matches in ${scope}.\n\nAre you sure you want to proceed?`
+					);
+					if (!confirmed) {
+						logger('Large replacement cancelled by user', 8);
+						return;
+					}
+				}
+			}
+
+			performReplacement();
 		});
 
 		// Apply settings
@@ -609,6 +816,60 @@ class RegexFindReplaceSettingTab extends PluginSettingTab {
 					logger('Settings update: prefillFind: ' + value);
 					this.plugin.settings.prefillFind = value;
 					await this.plugin.saveSettings();
+				}));
+
+		containerEl.createEl('h4', {text: 'Preview & Safety'});
+
+		new Setting(containerEl)
+			.setName('Show Preview')
+			.setDesc('Display a live preview of matches and replacements before performing the operation')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.showPreview)
+				.onChange(async (value) => {
+					logger('Settings update: showPreview: ' + value);
+					this.plugin.settings.showPreview = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Preview Limit')
+			.setDesc('Maximum number of matches to show in the preview')
+			.addText(text => text
+				.setPlaceholder('5')
+				.setValue(String(this.plugin.settings.previewLimit))
+				.onChange(async (value) => {
+					const num = parseInt(value);
+					if (!isNaN(num) && num > 0 && num <= 50) {
+						logger('Settings update: previewLimit: ' + num);
+						this.plugin.settings.previewLimit = num;
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		new Setting(containerEl)
+			.setName('Confirm Large Replacements')
+			.setDesc('Show a confirmation dialog when replacing many matches')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.confirmLargeReplace)
+				.onChange(async (value) => {
+					logger('Settings update: confirmLargeReplace: ' + value);
+					this.plugin.settings.confirmLargeReplace = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Large Replacement Threshold')
+			.setDesc('Number of matches that triggers the confirmation dialog')
+			.addText(text => text
+				.setPlaceholder('20')
+				.setValue(String(this.plugin.settings.largeReplaceThreshold))
+				.onChange(async (value) => {
+					const num = parseInt(value);
+					if (!isNaN(num) && num > 0 && num <= 1000) {
+						logger('Settings update: largeReplaceThreshold: ' + num);
+						this.plugin.settings.largeReplaceThreshold = num;
+						await this.plugin.saveSettings();
+					}
 				}));
 
 		containerEl.createEl('h4', {text: 'Saved Patterns'});
