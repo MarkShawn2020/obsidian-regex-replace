@@ -71,6 +71,10 @@ interface MatchPreview {
 	matchedText: string;
 	replacementText: string;
 	matchIndex: number;
+	lineAfterReplace: string;
+	matchStartInLine: number;
+	matchEndInLine: number;
+	isMultiLine: boolean;
 }
 
 const generateMatchPreviews = (
@@ -134,12 +138,22 @@ const generateMatchPreviews = (
 					// Finally, restore $$ to literal $
 					replacementText = replacementText.replace(new RegExp(dollarPlaceholder, 'g'), '$');
 
+					// Calculate the full line after replacement
+					const lineAfterReplace = line.substring(0, matchStart) + replacementText + line.substring(matchEnd);
+
+					// Check if match contains newlines
+					const isMultiLine = match[0].includes('\n');
+
 					previews.push({
 						lineNumber: i + 1,
 						lineContent: line,
 						matchedText: match[0],
 						replacementText: replacementText,
-						matchIndex: matchIndex++
+						matchIndex: matchIndex++,
+						lineAfterReplace: lineAfterReplace,
+						matchStartInLine: matchStart,
+						matchEndInLine: matchEnd,
+						isMultiLine: isMultiLine
 					});
 					if (!lineRegex.global) break;
 				}
@@ -154,14 +168,22 @@ const generateMatchPreviews = (
 
 		for (let i = 0; i < lines.length && previews.length < limit; i++) {
 			const line = lines[i];
-			if (line.includes(searchString)) {
-				const replacement = line.split(searchString).join(replaceString);
+			const matchStart = line.indexOf(searchString);
+			if (matchStart !== -1) {
+				const matchEnd = matchStart + searchString.length;
+				const lineAfterReplace = line.split(searchString).join(replaceString);
+				const isMultiLine = searchString.includes('\n');
+
 				previews.push({
 					lineNumber: i + 1,
 					lineContent: line,
 					matchedText: searchString,
-					replacementText: replacement,
-					matchIndex: matchIndex++
+					replacementText: replaceString,
+					matchIndex: matchIndex++,
+					lineAfterReplace: lineAfterReplace,
+					matchStartInLine: matchStart,
+					matchEndInLine: matchEnd,
+					isMultiLine: isMultiLine
 				});
 			}
 		}
@@ -574,20 +596,66 @@ class FindAndReplaceModal extends Modal {
 				const scope = selToggleComponent.getValue() ? 'selection' : 'document';
 				previewTitleEl.setText(`Preview: ${totalCount} match${totalCount !== 1 ? 'es' : ''} in ${scope}`);
 
+				const escapeHtml = (text: string) => {
+					return text
+						.replace(/&/g, '&amp;')
+						.replace(/</g, '&lt;')
+						.replace(/>/g, '&gt;')
+						.replace(/"/g, '&quot;')
+						.replace(/'/g, '&#039;');
+				};
+
+				const truncateWithEllipsis = (text: string, maxLen: number) => {
+					if (text.length <= maxLen) return text;
+					return text.substring(0, maxLen - 3) + '...';
+				};
+
 				let previewHtml = '';
 				previews.forEach(p => {
-					const oldText = p.matchedText.length > 50
-						? p.matchedText.substring(0, 47) + '...'
-						: p.matchedText;
-					const newLine = p.replacementText.length > 80
-						? p.replacementText.substring(0, 77) + '...'
-						: p.replacementText;
+					if (p.isMultiLine) {
+						// Handle multi-line matches specially
+						const displayMatch = truncateWithEllipsis(p.matchedText.replace(/\n/g, '↵'), 60);
+						const displayReplace = truncateWithEllipsis(p.replacementText.replace(/\n/g, '↵'), 60);
 
-					previewHtml += `<div style="margin-bottom: 0.5em; padding: 0.3em; border-left: 2px solid var(--interactive-accent);">`;
-					previewHtml += `<div style="font-size: 0.85em; color: var(--text-muted);">Line ${p.lineNumber}</div>`;
-					previewHtml += `<div style="color: var(--text-error); text-decoration: line-through;">"${oldText}"</div>`;
-					previewHtml += `<div style="color: var(--text-success);">→ "${newLine}"</div>`;
-					previewHtml += `</div>`;
+						previewHtml += `<div style="margin-bottom: 0.8em; padding: 0.5em; border-left: 3px solid var(--interactive-accent); background: var(--background-secondary-alt);">`;
+						previewHtml += `<div style="font-size: 0.85em; color: var(--text-muted); margin-bottom: 0.3em;">Line ${p.lineNumber} <span style="color: var(--text-warning);">(跨行匹配)</span></div>`;
+						previewHtml += `<div style="font-family: var(--font-monospace); font-size: 0.9em;">`;
+						previewHtml += `<div style="color: var(--text-error); margin-bottom: 0.2em;"><span style="opacity: 0.6;">−</span> ${escapeHtml(displayMatch)}</div>`;
+						previewHtml += `<div style="color: var(--text-success);"><span style="opacity: 0.6;">+</span> ${escapeHtml(displayReplace)}</div>`;
+						previewHtml += `</div></div>`;
+					} else {
+						// Show full line context with highlighted match
+						const maxLineLen = 120;
+						let displayLine = truncateWithEllipsis(p.lineContent, maxLineLen);
+						let displayLineAfter = truncateWithEllipsis(p.lineAfterReplace, maxLineLen);
+
+						// Build highlighted before line
+						const beforePart = escapeHtml(p.lineContent.substring(0, p.matchStartInLine));
+						const matchPart = escapeHtml(p.lineContent.substring(p.matchStartInLine, p.matchEndInLine));
+						const afterPart = escapeHtml(p.lineContent.substring(p.matchEndInLine));
+
+						const highlightedBefore = truncateWithEllipsis(
+							beforePart + `<span style="background: var(--background-modifier-error); padding: 0 2px; border-radius: 2px;">${matchPart}</span>` + afterPart,
+							maxLineLen + 100 // Allow extra for HTML tags
+						);
+
+						// Build highlighted after line
+						const afterBeforePart = escapeHtml(p.lineAfterReplace.substring(0, p.matchStartInLine));
+						const replacePart = escapeHtml(p.replacementText);
+						const afterAfterPart = escapeHtml(p.lineAfterReplace.substring(p.matchStartInLine + p.replacementText.length));
+
+						const highlightedAfter = truncateWithEllipsis(
+							afterBeforePart + `<span style="background: var(--background-modifier-success); padding: 0 2px; border-radius: 2px;">${replacePart}</span>` + afterAfterPart,
+							maxLineLen + 100
+						);
+
+						previewHtml += `<div style="margin-bottom: 0.8em; padding: 0.5em; border-left: 3px solid var(--interactive-accent); background: var(--background-secondary-alt);">`;
+						previewHtml += `<div style="font-size: 0.85em; color: var(--text-muted); margin-bottom: 0.3em;">Line ${p.lineNumber}</div>`;
+						previewHtml += `<div style="font-family: var(--font-monospace); font-size: 0.9em; line-height: 1.6;">`;
+						previewHtml += `<div style="margin-bottom: 0.2em;"><span style="opacity: 0.6; margin-right: 0.5em;">−</span>${highlightedBefore}</div>`;
+						previewHtml += `<div><span style="opacity: 0.6; margin-right: 0.5em;">+</span>${highlightedAfter}</div>`;
+						previewHtml += `</div></div>`;
+					}
 				});
 
 				if (totalCount > previews.length) {
