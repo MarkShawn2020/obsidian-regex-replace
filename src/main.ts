@@ -564,7 +564,9 @@ class FindAndReplaceModal extends Modal {
 			contentEl.appendChild(previewContainerEl);
 		}
 
-		const updatePreview = () => {
+		let currentPreviewLimit = this.settings.previewLimit;
+
+		const updatePreview = (keepLimit = false) => {
 			if (!this.settings.showPreview) return;
 
 			const searchString = findInputComponent.getValue();
@@ -573,7 +575,13 @@ class FindAndReplaceModal extends Modal {
 			if (!searchString) {
 				previewTitleEl.setText('Preview: Enter search text');
 				previewContentEl.setText('');
+				currentPreviewLimit = this.settings.previewLimit;
 				return;
+			}
+
+			// Reset limit when inputs change (unless explicitly keeping it)
+			if (!keepLimit) {
+				currentPreviewLimit = this.settings.previewLimit;
 			}
 
 			const targetText = selToggleComponent.getValue() && !noSelection
@@ -586,7 +594,7 @@ class FindAndReplaceModal extends Modal {
 				replaceString,
 				regToggleComponent.getValue(),
 				this.settings.caseInsensitive,
-				this.settings.previewLimit
+				Math.min(currentPreviewLimit, 50) // Cap at 50 to prevent performance issues
 			);
 
 			if (totalCount === 0) {
@@ -658,17 +666,37 @@ class FindAndReplaceModal extends Modal {
 					}
 				});
 
-				if (totalCount > previews.length) {
-					previewHtml += `<div style="font-style: italic; color: var(--text-muted); margin-top: 0.5em;">...and ${totalCount - previews.length} more</div>`;
-				}
-
 				previewContentEl.innerHTML = previewHtml;
+
+				// Add "Show more" button if there are more results
+				if (totalCount > previews.length) {
+					const showMoreBtn = document.createElement('button');
+					showMoreBtn.setText(`Show ${Math.min(totalCount - previews.length, 10)} more...`);
+					showMoreBtn.addClass('mod-cta');
+					showMoreBtn.style.marginTop = '0.5em';
+					showMoreBtn.style.width = '100%';
+					showMoreBtn.onclick = () => {
+						currentPreviewLimit += 10;
+						updatePreview(true);
+					};
+					previewContentEl.appendChild(showMoreBtn);
+
+					// Also show remaining count
+					const remainingText = document.createElement('div');
+					remainingText.style.fontStyle = 'italic';
+					remainingText.style.color = 'var(--text-muted)';
+					remainingText.style.marginTop = '0.5em';
+					remainingText.style.textAlign = 'center';
+					remainingText.style.fontSize = '0.9em';
+					remainingText.setText(`(${totalCount - previews.length} more matches)`);
+					previewContentEl.appendChild(remainingText);
+				}
 			}
 		};
 
 		// Add listeners to update preview
-		findInputComponent.inputEl.addEventListener('input', updatePreview);
-		replaceWithInputComponent.inputEl.addEventListener('input', updatePreview);
+		findInputComponent.inputEl.addEventListener('input', () => updatePreview());
+		replaceWithInputComponent.inputEl.addEventListener('input', () => updatePreview());
 		regToggleComponent.onChange(() => {
 			updatePreview();
 			if (regToggleComponent.getValue()) {
@@ -677,10 +705,7 @@ class FindAndReplaceModal extends Modal {
 				findRegexFlags.setText('');
 			}
 		});
-		selToggleComponent.onChange(updatePreview);
-
-		// Initial preview
-		updatePreview();
+		selToggleComponent.onChange(() => updatePreview());
 
 		// Create Buttons
 		const buttonContainerEl = document.createElement(divClass);
@@ -860,6 +885,9 @@ class FindAndReplaceModal extends Modal {
 
 		// If no text is selected, disable selection-toggle-switch
 		if (noSelection) selToggleComponent.setValue(false);
+
+		// Initial preview after all values are set
+		updatePreview();
 	}
 	
 	onClose() {
