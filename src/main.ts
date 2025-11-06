@@ -545,10 +545,15 @@ class FindAndReplaceModal extends Modal {
 		}
 
 		// Create input fields
+		const escapeHints = [];
+		if (this.settings.processLineBreak) escapeHints.push('\\n=LF');
+		if (this.settings.processTab) escapeHints.push('\\t=TAB');
+		const escapeHintText = escapeHints.length > 0 ? escapeHints.join(' ') : '';
+
 		const findRow = addTextComponent('Find:', 'e.g. (.*)', '/' + regexFlags);
 		findInputComponent = findRow[0];
 		const findRegexFlags = findRow[1];
-		const replaceRow = addTextComponent('Replace:', 'e.g. $1', this.settings.processLineBreak ? '\\n=LF' : '');
+		const replaceRow = addTextComponent('Replace:', 'e.g. $1', escapeHintText);
 		replaceWithInputComponent = replaceRow[0];
 
 		// Create and show regular expression toggle switch
@@ -594,14 +599,24 @@ class FindAndReplaceModal extends Modal {
 		const updatePreview = (keepLimit = false) => {
 			if (!this.settings.showPreview) return;
 
-			const searchString = findInputComponent.getValue();
-			const replaceString = replaceWithInputComponent.getValue();
+			let searchString = findInputComponent.getValue();
+			let replaceString = replaceWithInputComponent.getValue();
 
 			if (!searchString) {
 				previewTitleEl.setText('Preview: Enter search text');
 				previewContentEl.setText('');
 				currentPreviewLimit = this.settings.previewLimit;
 				return;
+			}
+
+			// Process escape sequences for preview
+			if (this.settings.processLineBreak) {
+				searchString = searchString.replace(/\\n/gm, '\n');
+				replaceString = replaceString.replace(/\\n/gm, '\n');
+			}
+			if (this.settings.processTab) {
+				searchString = searchString.replace(/\\t/gm, '\t');
+				replaceString = replaceString.replace(/\\t/gm, '\t');
 			}
 
 			// Reset limit when inputs change (unless explicitly keeping it)
@@ -759,7 +774,7 @@ class FindAndReplaceModal extends Modal {
 		const performReplacement = () => {
 			let resultString = 'No match';
 			let scope = '';
-			const searchString = findInputComponent.getValue();
+			let searchString = findInputComponent.getValue();
 			let replaceString = replaceWithInputComponent.getValue();
 			const selectedText = editor.getSelection();
 
@@ -770,13 +785,29 @@ class FindAndReplaceModal extends Modal {
 
 			// Replace line breaks in find-field if option is enabled
 			if (this.settings.processLineBreak) {
+				logger('Replacing linebreaks in find-field', 9);
+				logger('  old: ' + searchString, 9);
+				searchString = searchString.replace(/\\n/gm, '\n');
+				logger('  new: ' + searchString, 9);
+			}
+
+			// Replace tabs in find-field if option is enabled
+			if (this.settings.processTab) {
+				logger('Replacing tabs in find-field', 9);
+				logger('  old: ' + searchString, 9);
+				searchString = searchString.replace(/\\t/gm, '\t');
+				logger('  new: ' + searchString, 9);
+			}
+
+			// Replace line breaks in replace-field if option is enabled
+			if (this.settings.processLineBreak) {
 				logger('Replacing linebreaks in replace-field', 9);
 				logger('  old: ' + replaceString, 9);
 				replaceString = replaceString.replace(/\\n/gm, '\n');
 				logger('  new: ' + replaceString, 9);
 			}
 
-			// Replace line breaks in find-field if option is enabled
+			// Replace tabs in replace-field if option is enabled
 			if (this.settings.processTab) {
 				logger('Replacing tabs in replace-field', 9);
 				logger('  old: ' + replaceString, 9);
@@ -952,7 +983,7 @@ class RegexFindReplaceSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Process \\n as line break')
-			.setDesc('When \'\\n\' is used in the replace field, a \'line break\' will be inserted accordingly')
+			.setDesc('When \'\\n\' is used in the find or replace field, it will be treated as a line break. This allows searching for and replacing text across multiple lines.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.processLineBreak)
 				.onChange(async (value) => {
@@ -961,6 +992,16 @@ class RegexFindReplaceSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		new Setting(containerEl)
+			.setName('Process \\t as tab')
+			.setDesc('When \'\\t\' is used in the find or replace field, it will be treated as a tab character. This allows searching for and replacing tabs.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.processTab)
+				.onChange(async (value) => {
+					logger('Settings update: processTab: ' + value);
+					this.plugin.settings.processTab = value;
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl)
 			.setName('Prefill Find Field')
