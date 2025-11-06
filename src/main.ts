@@ -422,6 +422,8 @@ class FindAndReplaceModal extends Modal {
 		const { contentEl, titleEl, editor, modalEl } = this;
 
 		modalEl.addClass('find-replace-modal');
+		modalEl.style.width = '90vw';
+		modalEl.style.maxWidth = '1200px';
 		titleEl.setText('Regex Find/Replace');
 
 		const rowClass = 'row';
@@ -435,6 +437,24 @@ class FindAndReplaceModal extends Modal {
 		let findInputComponent: TextComponent;
 		let replaceWithInputComponent: TextComponent;
 		let regToggleComponent: ToggleComponent;
+
+		// Create two-column layout
+		const mainContainer = document.createElement(divClass);
+		mainContainer.style.display = 'flex';
+		mainContainer.style.gap = '1.5em';
+		mainContainer.style.alignItems = 'flex-start';
+
+		const leftColumn = document.createElement(divClass);
+		leftColumn.style.flex = '0 0 400px';
+		leftColumn.style.minWidth = '350px';
+
+		const rightColumn = document.createElement(divClass);
+		rightColumn.style.flex = '1';
+		rightColumn.style.minWidth = '300px';
+
+		mainContainer.appendChild(leftColumn);
+		mainContainer.appendChild(rightColumn);
+		contentEl.appendChild(mainContainer);
 
 		const addTextComponent = (label: string, placeholder: string, postfix=''): [TextComponent, HTMLDivElement] => {
 			const containerEl = document.createElement(divClass);
@@ -458,7 +478,7 @@ class FindAndReplaceModal extends Modal {
 			const component = new TextComponent(targetEl);
 			component.setPlaceholder(placeholder);
 
-			contentEl.append(containerEl);
+			leftColumn.append(containerEl);
 			return [component, labelEl2];
 		};
 
@@ -478,7 +498,7 @@ class FindAndReplaceModal extends Modal {
 
 			containerEl.appendChild(labelEl);
 			containerEl.appendChild(targetEl);
-			if (!hide) contentEl.appendChild(containerEl);
+			if (!hide) leftColumn.appendChild(containerEl);
 			return component;
 		};
 
@@ -510,7 +530,7 @@ class FindAndReplaceModal extends Modal {
 
 			patternContainerEl.appendChild(labelEl);
 			patternContainerEl.appendChild(dropdownEl);
-			contentEl.appendChild(patternContainerEl);
+			leftColumn.appendChild(patternContainerEl);
 
 			dropdownComponent.onChange((patternId) => {
 				if (!patternId) return;
@@ -537,31 +557,36 @@ class FindAndReplaceModal extends Modal {
 		// Create and show selection toggle switch only if any text is selected
 		const selToggleComponent = addToggleComponent('Replace only in selection', 'If enabled, replaces only occurances in the currently selected text', noSelection);
 
-		// Create preview section
+		// Create preview section (right column)
 		const previewContainerEl = document.createElement(divClass);
 		previewContainerEl.addClass('preview-container');
-		previewContainerEl.style.marginTop = '1em';
-		previewContainerEl.style.marginBottom = '1em';
+		previewContainerEl.style.height = '100%';
+		previewContainerEl.style.display = 'flex';
+		previewContainerEl.style.flexDirection = 'column';
 
 		const previewTitleEl = document.createElement(divClass);
 		previewTitleEl.addClass('preview-title');
 		previewTitleEl.style.fontWeight = 'bold';
 		previewTitleEl.style.marginBottom = '0.5em';
+		previewTitleEl.style.fontSize = '1.1em';
+		previewTitleEl.style.paddingBottom = '0.5em';
+		previewTitleEl.style.borderBottom = '1px solid var(--background-modifier-border)';
 
 		const previewContentEl = document.createElement(divClass);
 		previewContentEl.addClass('preview-content');
 		previewContentEl.style.fontSize = '0.9em';
-		previewContentEl.style.maxHeight = '200px';
+		previewContentEl.style.flex = '1';
 		previewContentEl.style.overflowY = 'auto';
 		previewContentEl.style.padding = '0.5em';
 		previewContentEl.style.backgroundColor = 'var(--background-secondary)';
 		previewContentEl.style.borderRadius = '4px';
+		previewContentEl.style.marginTop = '0.5em';
 
 		previewContainerEl.appendChild(previewTitleEl);
 		previewContainerEl.appendChild(previewContentEl);
 
 		if (this.settings.showPreview) {
-			contentEl.appendChild(previewContainerEl);
+			rightColumn.appendChild(previewContainerEl);
 		}
 
 		let currentPreviewLimit = this.settings.previewLimit;
@@ -881,7 +906,8 @@ class FindAndReplaceModal extends Modal {
 		// Add button row to dialog
 		buttonContainerEl.appendChild(submitButtonTarget);
 		buttonContainerEl.appendChild(cancelButtonTarget);
-		contentEl.appendChild(buttonContainerEl);
+		buttonContainerEl.style.marginTop = '1em';
+		leftColumn.appendChild(buttonContainerEl);
 
 		// If no text is selected, disable selection-toggle-switch
 		if (noSelection) selToggleComponent.setValue(false);
