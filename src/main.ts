@@ -1,6 +1,7 @@
 import {
 	App,
 	ButtonComponent,
+	DropdownComponent,
 	Editor,
 	Modal,
 	Notice,
@@ -11,6 +12,18 @@ import {
 	Setting
 } from 'obsidian';
 
+interface RegexPattern {
+	id: string;
+	name: string;
+	findText: string;
+	replaceText: string;
+	useRegEx: boolean;
+	caseInsensitive: boolean;
+	isPinned: boolean;
+	lastUsed: number;
+	useCount: number;
+}
+
 interface RfrPluginSettings {
 	findText: string;
 	replaceText: string;
@@ -20,6 +33,8 @@ interface RfrPluginSettings {
 	processLineBreak: boolean;
 	processTab: boolean;
 	prefillFind: boolean;
+	savedPatterns: RegexPattern[];
+	maxHistorySize: number;
 }
 
 const DEFAULT_SETTINGS: RfrPluginSettings = {
@@ -30,7 +45,9 @@ const DEFAULT_SETTINGS: RfrPluginSettings = {
 	caseInsensitive: false,
 	processLineBreak: false,
 	processTab: false,
-	prefillFind: false
+	prefillFind: false,
+	savedPatterns: [],
+	maxHistorySize: 10
 }
 
 // logThreshold: 0 ... only error messages
@@ -129,6 +146,68 @@ const fixMarkdownFormatting = (text: string): { text: string; stats: FixStat[] }
 export default class RegexFindReplacePlugin extends Plugin {
 	settings: RfrPluginSettings;
 
+	generatePatternName(findText: string): string {
+		const maxLen = 30;
+		if (findText.length <= maxLen) return findText;
+		return findText.substring(0, maxLen) + '...';
+	}
+
+	savePattern(findText: string, replaceText: string, useRegEx: boolean, caseInsensitive: boolean): void {
+		const now = Date.now();
+		const existingIndex = this.settings.savedPatterns.findIndex(
+			p => p.findText === findText &&
+			     p.replaceText === replaceText &&
+			     p.useRegEx === useRegEx &&
+			     p.caseInsensitive === caseInsensitive
+		);
+
+		if (existingIndex !== -1) {
+			const pattern = this.settings.savedPatterns[existingIndex];
+			pattern.lastUsed = now;
+			pattern.useCount++;
+			this.settings.savedPatterns.splice(existingIndex, 1);
+			this.settings.savedPatterns.unshift(pattern);
+		} else {
+			const newPattern: RegexPattern = {
+				id: `${now}-${Math.random().toString(36).substr(2, 9)}`,
+				name: this.generatePatternName(findText),
+				findText,
+				replaceText,
+				useRegEx,
+				caseInsensitive,
+				isPinned: false,
+				lastUsed: now,
+				useCount: 1
+			};
+			this.settings.savedPatterns.unshift(newPattern);
+			this.pruneHistory();
+		}
+		this.saveSettings();
+	}
+
+	pruneHistory(): void {
+		const pinned = this.settings.savedPatterns.filter(p => p.isPinned);
+		const unpinned = this.settings.savedPatterns.filter(p => !p.isPinned);
+
+		if (unpinned.length > this.settings.maxHistorySize) {
+			unpinned.sort((a, b) => b.lastUsed - a.lastUsed);
+			this.settings.savedPatterns = [...pinned, ...unpinned.slice(0, this.settings.maxHistorySize)];
+		}
+	}
+
+	deletePattern(patternId: string): void {
+		this.settings.savedPatterns = this.settings.savedPatterns.filter(p => p.id !== patternId);
+		this.saveSettings();
+	}
+
+	togglePinPattern(patternId: string): void {
+		const pattern = this.settings.savedPatterns.find(p => p.id === patternId);
+		if (pattern) {
+			pattern.isPinned = !pattern.isPinned;
+			this.saveSettings();
+		}
+	}
+
 	async onload() {
 		logger('Loading Plugin...', 9);
 		await this.loadSettings();
@@ -218,6 +297,10 @@ class FindAndReplaceModal extends Modal {
 
 		logger('No text selected?: ' + noSelection, 9);
 
+		let findInputComponent: TextComponent;
+		let replaceWithInputComponent: TextComponent;
+		let regToggleComponent: ToggleComponent;
+
 		const addTextComponent = (label: string, placeholder: string, postfix=''): [TextComponent, HTMLDivElement] => {
 			const containerEl = document.createElement(divClass);
 			containerEl.addClass(rowClass);
@@ -247,32 +330,74 @@ class FindAndReplaceModal extends Modal {
 		const addToggleComponent = (label: string, tooltip: string, hide = false): ToggleComponent => {
 			const containerEl = document.createElement(divClass);
 			containerEl.addClass(rowClass);
-	
+
 			const targetEl = document.createElement(divClass);
 			targetEl.addClass(rowClass);
 
 			const component = new ToggleComponent(targetEl);
 			component.setTooltip(tooltip);
-	
+
 			const labelEl = document.createElement(divClass);
 			labelEl.addClass('check-label');
 			labelEl.setText(label);
-	
+
 			containerEl.appendChild(labelEl);
 			containerEl.appendChild(targetEl);
 			if (!hide) contentEl.appendChild(containerEl);
 			return component;
 		};
 
+		// Create saved patterns dropdown
+		if (this.settings.savedPatterns.length > 0) {
+			const patternContainerEl = document.createElement(divClass);
+			patternContainerEl.addClass(rowClass);
+
+			const labelEl = document.createElement(divClass);
+			labelEl.addClass('input-label');
+			labelEl.setText('Saved:');
+
+			const dropdownEl = document.createElement(divClass);
+			dropdownEl.addClass('input-wrapper');
+
+			const dropdownComponent = new DropdownComponent(dropdownEl);
+			dropdownComponent.addOption('', 'Select a saved pattern...');
+
+			const sortedPatterns = [...this.settings.savedPatterns].sort((a, b) => {
+				if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+				return b.lastUsed - a.lastUsed;
+			});
+
+			sortedPatterns.forEach(pattern => {
+				const prefix = pattern.isPinned ? '⭐ ' : '';
+				const displayName = `${prefix}${pattern.name}`;
+				dropdownComponent.addOption(pattern.id, displayName);
+			});
+
+			patternContainerEl.appendChild(labelEl);
+			patternContainerEl.appendChild(dropdownEl);
+			contentEl.appendChild(patternContainerEl);
+
+			dropdownComponent.onChange((patternId) => {
+				if (!patternId) return;
+				const pattern = this.settings.savedPatterns.find(p => p.id === patternId);
+				if (pattern) {
+					findInputComponent.setValue(pattern.findText);
+					replaceWithInputComponent.setValue(pattern.replaceText);
+					regToggleComponent.setValue(pattern.useRegEx);
+					logger('Loaded saved pattern: ' + pattern.name, 9);
+				}
+			});
+		}
+
 		// Create input fields
 		const findRow = addTextComponent('Find:', 'e.g. (.*)', '/' + regexFlags);
-		const findInputComponent = findRow[0];
+		findInputComponent = findRow[0];
 		const findRegexFlags = findRow[1];
 		const replaceRow = addTextComponent('Replace:', 'e.g. $1', this.settings.processLineBreak ? '\\n=LF' : '');
-		const replaceWithInputComponent = replaceRow[0];
+		replaceWithInputComponent = replaceRow[0];
 
 		// Create and show regular expression toggle switch
-		const regToggleComponent = addToggleComponent('Use regular expressions', 'If enabled, regular expressions in the find field are processed as such, and regex groups might be addressed in the replace field');
+		regToggleComponent = addToggleComponent('Use regular expressions', 'If enabled, regular expressions in the find field are processed as such, and regex groups might be addressed in the replace field');
 		
 		// Update regex-flags label if regular expressions are enabled or disabled
 		regToggleComponent.onChange( regNew => {
@@ -387,6 +512,17 @@ class FindAndReplaceModal extends Modal {
 			this.settings.replaceText = replaceString;
 			this.settings.useRegEx = regToggleComponent.getValue();
 			this.settings.selOnly = selToggleComponent.getValue();
+
+			// Auto-save successful pattern to history
+			if (resultString !== 'No match') {
+				(this.plugin as RegexFindReplacePlugin).savePattern(
+					searchString,
+					replaceWithInputComponent.getValue(),
+					regToggleComponent.getValue(),
+					this.settings.caseInsensitive
+				);
+			}
+
 			this.plugin.saveData(this.settings);
 
 			this.close();
@@ -474,5 +610,69 @@ class RegexFindReplaceSettingTab extends PluginSettingTab {
 					this.plugin.settings.prefillFind = value;
 					await this.plugin.saveSettings();
 				}));
+
+		containerEl.createEl('h4', {text: 'Saved Patterns'});
+
+		new Setting(containerEl)
+			.setName('Max History Size')
+			.setDesc('Maximum number of unpinned patterns to keep in history (pinned patterns are never removed)')
+			.addText(text => text
+				.setPlaceholder('10')
+				.setValue(String(this.plugin.settings.maxHistorySize))
+				.onChange(async (value) => {
+					const num = parseInt(value);
+					if (!isNaN(num) && num > 0 && num <= 100) {
+						logger('Settings update: maxHistorySize: ' + num);
+						this.plugin.settings.maxHistorySize = num;
+						this.plugin.pruneHistory();
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		if (this.plugin.settings.savedPatterns.length > 0) {
+			const sortedPatterns = [...this.plugin.settings.savedPatterns].sort((a, b) => {
+				if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+				return b.lastUsed - a.lastUsed;
+			});
+
+			sortedPatterns.forEach(pattern => {
+				const setting = new Setting(containerEl)
+					.setName(pattern.name)
+					.setDesc(`Find: ${pattern.findText.substring(0, 50)} | Replace: ${pattern.replaceText.substring(0, 50)}`);
+
+				setting.addExtraButton(button => button
+					.setIcon(pattern.isPinned ? 'pin' : 'pin-off')
+					.setTooltip(pattern.isPinned ? 'Unpin' : 'Pin')
+					.onClick(async () => {
+						this.plugin.togglePinPattern(pattern.id);
+						this.display();
+					}));
+
+				setting.addExtraButton(button => button
+					.setIcon('trash')
+					.setTooltip('Delete')
+					.onClick(async () => {
+						this.plugin.deletePattern(pattern.id);
+						this.display();
+					}));
+			});
+
+			new Setting(containerEl)
+				.setName('Clear All Patterns')
+				.setDesc('Remove all saved patterns from history')
+				.addButton(button => button
+					.setButtonText('Clear All')
+					.setWarning()
+					.onClick(async () => {
+						this.plugin.settings.savedPatterns = [];
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+		} else {
+			containerEl.createEl('p', {
+				text: 'No saved patterns yet. Patterns will be automatically saved when you perform replacements.',
+				cls: 'setting-item-description'
+			});
+		}
 	}
 }
