@@ -98,14 +98,47 @@ const generateMatchPreviews = (
 				const line = lines[i];
 				const lineRegex = new RegExp(searchString, caseInsensitive ? 'gi' : 'g');
 				let match;
+
 				while ((match = lineRegex.exec(line)) !== null) {
 					if (previews.length >= limit) break;
-					const replacement = line.replace(new RegExp(searchString, caseInsensitive ? 'gi' : 'g'), replaceString);
+
+					// Calculate the replacement for this specific match
+					// Manually handle replacement string special patterns
+					let replacementText = replaceString;
+
+					// First, protect $$ by replacing with a placeholder
+					const dollarPlaceholder = '\x00DOLLAR\x00';
+					replacementText = replacementText.replace(/\$\$/g, dollarPlaceholder);
+
+					// Get match position for $` and $'
+					const matchStart = match.index !== undefined ? match.index : 0;
+					const matchEnd = matchStart + match[0].length;
+
+					// Replace $` with text before match
+					const beforeMatch = line.substring(0, matchStart);
+					replacementText = replacementText.replace(/\$`/g, beforeMatch);
+
+					// Replace $' with text after match
+					const afterMatch = line.substring(matchEnd);
+					replacementText = replacementText.replace(/\$'/g, afterMatch);
+
+					// Replace $& with the entire match
+					replacementText = replacementText.replace(/\$&/g, match[0]);
+
+					// Replace $n with capture groups (in reverse order to avoid conflicts like $1 and $10)
+					for (let n = match.length - 1; n >= 1; n--) {
+						const groupValue = match[n] !== undefined ? match[n] : '';
+						replacementText = replacementText.replace(new RegExp('\\$' + n, 'g'), groupValue);
+					}
+
+					// Finally, restore $$ to literal $
+					replacementText = replacementText.replace(new RegExp(dollarPlaceholder, 'g'), '$');
+
 					previews.push({
 						lineNumber: i + 1,
 						lineContent: line,
 						matchedText: match[0],
-						replacementText: replacement,
+						replacementText: replacementText,
 						matchIndex: matchIndex++
 					});
 					if (!lineRegex.global) break;
