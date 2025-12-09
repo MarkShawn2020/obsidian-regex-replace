@@ -1,6 +1,10 @@
 import typescript from "@rollup/plugin-typescript";
 import { nodeResolve } from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
+import replace from "@rollup/plugin-replace";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pkg = require("./package.json");
 
 const isProd = process.env.BUILD === "production";
 
@@ -21,5 +25,13 @@ export default {
 		banner,
 	},
 	external: ["obsidian"],
-	plugins: [typescript(), nodeResolve({ browser: true }), commonjs()],
+	plugins: [
+		replace({
+			preventAssignment: true,
+			__VERSION__: JSON.stringify(pkg.version),
+		}),
+		typescript(),
+		nodeResolve({ browser: true }),
+		commonjs(),
+	],
 };

@@ -30,6 +30,7 @@ interface RfrPluginSettings {
 	useRegEx: boolean;
 	selOnly: boolean;
 	caseInsensitive: boolean;
+	multilineMatch: boolean;
 	processLineBreak: boolean;
 	processTab: boolean;
 	prefillFind: boolean;
@@ -46,7 +47,8 @@ const DEFAULT_SETTINGS: RfrPluginSettings = {
 	replaceText: '',
 	useRegEx: true,
 	selOnly: false,
-	caseInsensitive: false,
+	caseInsensitive: true,
+	multilineMatch: true,
 	processLineBreak: false,
 	processTab: false,
 	prefillFind: false,
@@ -83,6 +85,7 @@ const generateMatchPreviews = (
 	replaceString: string,
 	useRegEx: boolean,
 	caseInsensitive: boolean,
+	multilineMatch: boolean,
 	limit: number
 ): { previews: MatchPreview[], totalCount: number } => {
 	const previews: MatchPreview[] = [];
@@ -91,7 +94,8 @@ const generateMatchPreviews = (
 	let matchIndex = 0;
 
 	if (useRegEx) {
-		let regexFlags = 'gm';
+		let regexFlags = 'g';
+		if (multilineMatch) regexFlags += 'm';
 		if (caseInsensitive) regexFlags += 'i';
 		try {
 			const searchRegex = new RegExp(searchString, regexFlags);
@@ -396,8 +400,8 @@ export default class RegexFindReplacePlugin extends Plugin {
 		logger('   findVal:         ' + this.settings.findText, 6);
 		logger('   replaceText:     ' + this.settings.replaceText, 6);
 		logger('   caseInsensitive: ' + this.settings.caseInsensitive, 6);
+		logger('   multilineMatch:  ' + this.settings.multilineMatch, 6);
 		logger('   processLineBreak: ' + this.settings.processLineBreak, 6);
-
 	}
 
 	async saveSettings() {
@@ -424,13 +428,19 @@ class FindAndReplaceModal extends Modal {
 		modalEl.addClass('find-replace-modal');
 		modalEl.style.width = '90vw';
 		modalEl.style.maxWidth = '1200px';
-		titleEl.setText('Regex Find/Replace');
+		// @ts-ignore - __VERSION__ is replaced by rollup at build time
+		titleEl.setText('Regex Find/Replace v' + __VERSION__);
 
 		const rowClass = 'row';
 		const divClass = 'div';
 		const noSelection = editor.getSelection() === '';
-		let regexFlags = 'gm';
-		if (this.settings.caseInsensitive) regexFlags = regexFlags.concat('i');
+		const buildRegexFlags = () => {
+			let flags = 'g';
+			if (this.settings.multilineMatch) flags += 'm';
+			if (this.settings.caseInsensitive) flags += 'i';
+			return flags;
+		};
+		let regexFlags = buildRegexFlags();
 
 		logger('No text selected?: ' + noSelection, 9);
 
@@ -480,6 +490,69 @@ class FindAndReplaceModal extends Modal {
 
 			leftColumn.append(containerEl);
 			return [component, labelEl2];
+		};
+
+		// Create interactive regex flags component
+		const createFlagsComponent = (container: HTMLDivElement) => {
+			container.empty();
+			container.style.fontFamily = 'var(--font-monospace)';
+			container.style.cursor = 'pointer';
+			container.style.userSelect = 'none';
+
+			const slash = document.createElement('span');
+			slash.setText('/');
+			slash.style.opacity = '0.5';
+			container.appendChild(slash);
+
+			const createFlag = (flag: string, enabled: boolean, tooltip: string, onClick: () => void) => {
+				const span = document.createElement('span');
+				span.setText(flag);
+				span.style.opacity = enabled ? '1' : '0.3';
+				span.style.textDecoration = enabled ? 'none' : 'line-through';
+				span.style.padding = '0 1px';
+				span.title = tooltip;
+				span.onclick = (e) => {
+					e.stopPropagation();
+					onClick();
+				};
+				span.onmouseenter = () => { span.style.color = 'var(--interactive-accent)'; };
+				span.onmouseleave = () => { span.style.color = ''; };
+				return span;
+			};
+
+			// g is always on (not clickable)
+			const gSpan = document.createElement('span');
+			gSpan.setText('g');
+			gSpan.title = 'Global (always on)';
+			gSpan.style.opacity = '0.7';
+			container.appendChild(gSpan);
+
+			container.appendChild(createFlag('m', this.settings.multilineMatch,
+				'Multiline: ^ and $ match line boundaries',
+				() => {
+					this.settings.multilineMatch = !this.settings.multilineMatch;
+					this.plugin.saveData(this.settings);
+					updateFlagsDisplay();
+					updatePreview();
+				}));
+
+			container.appendChild(createFlag('i', this.settings.caseInsensitive,
+				'Case insensitive',
+				() => {
+					this.settings.caseInsensitive = !this.settings.caseInsensitive;
+					this.plugin.saveData(this.settings);
+					updateFlagsDisplay();
+					updatePreview();
+				}));
+		};
+
+		let flagsContainer: HTMLDivElement;
+		const updateFlagsDisplay = () => {
+			if (flagsContainer && regToggleComponent?.getValue()) {
+				createFlagsComponent(flagsContainer);
+			} else if (flagsContainer) {
+				flagsContainer.empty();
+			}
 		};
 
 		const addToggleComponent = (label: string, tooltip: string, hide = false): ToggleComponent => {
@@ -550,9 +623,12 @@ class FindAndReplaceModal extends Modal {
 		if (this.settings.processTab) escapeHints.push('\\t=TAB');
 		const escapeHintText = escapeHints.length > 0 ? escapeHints.join(' ') : '';
 
-		const findRow = addTextComponent('Find:', 'e.g. (.*)', '/' + regexFlags);
+		const findRow = addTextComponent('Find:', 'e.g. (.*)');
 		findInputComponent = findRow[0];
-		const findRegexFlags = findRow[1];
+		flagsContainer = findRow[1];
+		if (this.settings.useRegEx) {
+			createFlagsComponent(flagsContainer);
+		}
 		const replaceRow = addTextComponent('Replace:', 'e.g. $1', escapeHintText);
 		replaceWithInputComponent = replaceRow[0];
 
@@ -634,6 +710,7 @@ class FindAndReplaceModal extends Modal {
 				replaceString,
 				regToggleComponent.getValue(),
 				this.settings.caseInsensitive,
+				this.settings.multilineMatch,
 				Math.min(currentPreviewLimit, 50) // Cap at 50 to prevent performance issues
 			);
 
@@ -739,11 +816,7 @@ class FindAndReplaceModal extends Modal {
 		replaceWithInputComponent.inputEl.addEventListener('input', () => updatePreview());
 		regToggleComponent.onChange(() => {
 			updatePreview();
-			if (regToggleComponent.getValue()) {
-				findRegexFlags.setText('/' + regexFlags);
-			} else {
-				findRegexFlags.setText('');
-			}
+			updateFlagsDisplay();
 		});
 		selToggleComponent.onChange(() => updatePreview());
 
@@ -817,9 +890,10 @@ class FindAndReplaceModal extends Modal {
 
 			// Check if regular expressions should be used
 			if(regToggleComponent.getValue()) {
-				logger('USING regex with flags: ' + regexFlags, 8);
+				const currentFlags = buildRegexFlags();
+				logger('USING regex with flags: ' + currentFlags, 8);
 
-				const searchRegex = new RegExp(searchString, regexFlags);
+				const searchRegex = new RegExp(searchString, currentFlags);
 				if(!selToggleComponent.getValue()) {
 					logger('   SCOPE: Full document', 9);
 					const documentText = editor.getValue();
@@ -900,6 +974,7 @@ class FindAndReplaceModal extends Modal {
 					replaceWithInputComponent.getValue(),
 					regToggleComponent.getValue(),
 					this.settings.caseInsensitive,
+					this.settings.multilineMatch,
 					1
 				);
 
@@ -969,12 +1044,23 @@ class RegexFindReplaceSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Case Insensitive')
-			.setDesc('When using regular expressions, apply the \'/i\' modifier for case insensitive search)')
+			.setDesc('Apply the /i modifier for case insensitive search')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.caseInsensitive)
 				.onChange(async (value) => {
 					logger('Settings update: caseInsensitive: ' + value);
 					this.plugin.settings.caseInsensitive = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Multiline Mode')
+			.setDesc('Apply the /m modifier (^ and $ match line start/end instead of string start/end)')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.multilineMatch)
+				.onChange(async (value) => {
+					logger('Settings update: multilineMatch: ' + value);
+					this.plugin.settings.multilineMatch = value;
 					await this.plugin.saveSettings();
 				}));
 
