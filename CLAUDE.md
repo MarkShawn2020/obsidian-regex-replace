@@ -3,38 +3,40 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-This is an Obsidian plugin that provides regex-based find/replace functionality in the editor. The plugin is written in TypeScript and uses Rollup for bundling.
+Obsidian plugin for regex-based find/replace in the editor. TypeScript + Rollup bundling.
 
 ## Build Commands
-- `npm run dev` - Watch mode for development (rebuilds on file changes)
-- `npm run build` - Production build (creates main.js in root)
+- `npm run dev` - Watch mode (rebuilds on changes)
+- `npm run build` - Production build (outputs main.js to root)
 
 ## Architecture
-Single-file architecture: All code lives in `src/main.ts` containing:
-- `RegexFindReplacePlugin` - Main plugin class that registers the command
-- `FindAndReplaceModal` - Modal dialog for find/replace UI
-- `RegexFindReplaceSettingTab` - Settings tab in Obsidian preferences
-- `RfrPluginSettings` interface - Plugin settings structure
+Single-file: all code in `src/main.ts`:
+- `RegexFindReplacePlugin` - Main plugin, registers commands, manages pattern history
+- `FindAndReplaceModal` - Two-column modal with live preview
+- `RegexFindReplaceSettingTab` - Plugin settings UI
+- `generateMatchPreviews()` - Generates preview diffs with line context
+- `fixMarkdownFormatting()` - Markdown formatting fixer (headings, lists, trailing whitespace)
 
-Settings are persisted via Obsidian's `loadData()`/`saveData()` API and include:
-- Find/replace text (retained between sessions)
-- Toggle states: useRegEx, selOnly, caseInsensitive, processLineBreak, processTab, prefillFind
+Two commands registered:
+1. `obsidian-regex-replace` - Main find/replace modal
+2. `markdown-fix-formatting` - Auto-fix common Markdown issues
 
 ## Key Implementation Details
-- The plugin operates on the active editor, either on full document or selection
-- Regex mode uses RegExp with flags 'gm' (plus 'i' if case-insensitive enabled)
-- Plain text mode uses string.split() + join() for replacement
-- Logging controlled via `logThreshold` constant (0=errors only, 9=verbose)
-- Modal UI built using Obsidian's component system (TextComponent, ToggleComponent, ButtonComponent)
+- `__VERSION__` replaced at build time via rollup-plugin-replace (from package.json)
+- Regex flags: 'g' always, 'm' for multiline, 'i' for case-insensitive (clickable in UI)
+- Pattern history: auto-saved on successful replace, supports pinning, configurable max size
+- Preview: shows line-by-line diff with highlighted changes, "show more" pagination
+- Plain text mode: string.split()+join() for replacement
+- Logging: `logThreshold` constant (0=errors, 9=verbose)
 
-## Plugin Distribution
-Release artifacts (committed to repo root, not ignored):
-- `main.js` - Bundled plugin code
-- `manifest.json` - Plugin metadata (version must match package.json)
-- `styles.css` - Modal styling
-- `versions.json` - Version compatibility info
+## Settings (RfrPluginSettings)
+Core: findText, replaceText, useRegEx, selOnly, caseInsensitive, multilineMatch
+Escape handling: processLineBreak (`\n`), processTab (`\t`)
+UX: prefillFind, showPreview, previewLimit, confirmLargeReplace, largeReplaceThreshold
+History: savedPatterns (RegexPattern[]), maxHistorySize
 
-## Development Notes
-- Obsidian API is treated as external dependency (not bundled)
-- No test framework currently configured
-- Desktop and mobile versions supported
+## Release Artifacts (committed to root)
+- `main.js` - Bundled code
+- `manifest.json` - Version must match package.json
+- `styles.css` - Modal CSS
+- `versions.json` - Maps plugin version to min Obsidian version
